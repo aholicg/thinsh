@@ -12,12 +12,12 @@
 #define MAX_CMD_LEN 1024
 #define MAX_ARGS 64
 
-// --- SIGNAL HANDLER (Requirement: Abort/Ctrl+C) ---
-// This ensures Ctrl+Shift+C kills the running process, not the shell itself.
+// --- SIGNAL HANDLER ---
 void handle_sigint(int sig) {
-    printf("\nCaught Signal %d (Ctrl+Shift+C). Type 'exit' to quit.\n", sig);
-    printf("thinsh> "); // Re-print prompt
-    fflush(stdout);
+    printf("\n"); // Move to new line
+    rl_on_new_line(); // Tell readline we moved
+    rl_replace_line("", 0); // Clear current input buffer
+    rl_redisplay(); // Show prompt again
 }
 
 // --- BUILT-IN: TIME/DATE ---
@@ -74,6 +74,8 @@ void cmd_help() {
 int main() {
     char *line;  // readline returns a malloc'd string
     char *argv[MAX_ARGS];
+    char cwd[1024];
+    char prompt[1024];
     int background;
 
     // Register Signal Handler
@@ -83,9 +85,29 @@ int main() {
     using_history();
 
     while (1) {
-        // 1. GET INPUT (Replaces printf + fgets)
+        // 1. DYNAMIC PROMPT GENERATION
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            // Find the last slash '/'
+            char *base_name = strrchr(cwd, '/');
+            
+            if (base_name == NULL) {
+                // Should not happen, but safe fallback
+                snprintf(prompt, sizeof(prompt), "%s> ", cwd); 
+            } else if (strcmp(cwd, "/") == 0) {
+                // Special case: We are at root
+                snprintf(prompt, sizeof(prompt), "/ > ");
+            } else {
+                // Normal case: Skip the slash (pointer + 1)
+                snprintf(prompt, sizeof(prompt), "%s/ > ", base_name + 1);
+            }
+        } else {
+            // If getcwd fails, fallback to default
+            snprintf(prompt, sizeof(prompt), "unknown> ");
+        }
+
+        // 2. GET INPUT (Replaces printf + fgets)
         // readline handles printing the prompt and capturing arrows/editing
-        line = readline("thinsh> ");
+        line = readline(prompt);
 
         // Check for EOF (Ctrl+D)
         if (!line) break;
