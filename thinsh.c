@@ -63,6 +63,7 @@ void cmd_help() {
     printf("--- thinsh Help ---\n");
     printf("dir       : List files (ls -al)\n");
     printf("date      : Show time/date\n");
+    printf("history   : List past commands\n");
     printf("path      : Show current PATH\n");
     printf("addpath X : Add X to PATH\n");
     printf("exit      : Quit shell\n");
@@ -71,97 +72,90 @@ void cmd_help() {
 }
 
 int main() {
-    char line[MAX_CMD_LEN];
+    char *line;  // readline returns a malloc'd string
     char *argv[MAX_ARGS];
     int background;
 
     // Register Signal Handler
     signal(SIGINT, handle_sigint);
 
+    // Configure Readline (Optional)
+    using_history();
+
     while (1) {
-        // 1. Prompt
-        printf("thinsh> ");
-        if (fgets(line, sizeof(line), stdin) == NULL) break; // Handle Ctrl+D
+        // 1. GET INPUT (Replaces printf + fgets)
+        // readline handles printing the prompt and capturing arrows/editing
+        line = readline("thinsh> ");
 
-        // Remove newline
-        line[strcspn(line, "\n")] = 0;
+        // Check for EOF (Ctrl+D)
+        if (!line) break;
 
-        // Skip empty lines
-        if (strlen(line) == 0) continue;
+        // Skip empty lines but do not crash
+        if (strlen(line) == 0) {
+            free(line);
+            continue;
+        }
 
-        // 2. Parsing (Tokenize)
+        // 2. ADD TO HISTORY
+        add_history(line);
+
+        // 3. PARSE INPUT
+        // We need to copy line because strtok modifies it, 
+        // and we might want to keep the original for history? 
+        // (Actually readline already saved the original).
+        
         int i = 0;
         argv[i] = strtok(line, " ");
         while (argv[i] != NULL && i < MAX_ARGS - 1) {
             argv[++i] = strtok(NULL, " ");
         }
         
-        // 3. Check for Background Mode (&)
-        // If the last argument is "&", remove it and set flag
+        if (argv[0] == NULL) {
+            free(line);
+            continue;
+        }
+
+        // 4. CHECK BACKGROUND (&)
         background = 0;
         if (i > 0 && strcmp(argv[i-1], "&") == 0) {
             background = 1;
-            argv[i-1] = NULL; // Remove "&" from arguments passed to exec
+            argv[i-1] = NULL;
         }
 
-        if (argv[0] == NULL) continue;
-
-        // 4. Built-in Commands Router
+        // 5. BUILT-INS
         if (strcmp(argv[0], "exit") == 0) {
-            printf("Goodbye!\n");
-            exit(0);
+            free(line);
+            break;
         } 
         else if (strcmp(argv[0], "cd") == 0) {
-            if (argv[1] == NULL || chdir(argv[1]) != 0) {
-                perror("cd failed");
-            }
-            continue;
+            if (argv[1] == NULL || chdir(argv[1]) != 0) perror("cd failed");
         } 
-        else if (strcmp(argv[0], "help") == 0) {
-            cmd_help();
-            continue;
+        else if (strcmp(argv[0], "history") == 0) {
+            cmd_history();
         }
-        else if (strcmp(argv[0], "date") == 0 || strcmp(argv[0], "time") == 0) {
-            cmd_date();
-            continue;
-        }
-        else if (strcmp(argv[0], "path") == 0 || strcmp(argv[0], "addpath") == 0) {
-            cmd_path(argv);
-            continue;
-        }
+        else if (strcmp(argv[0], "help") == 0) cmd_help();
+        else if (strcmp(argv[0], "date") == 0 || strcmp(argv[0], "time") == 0) cmd_date();
+        else if (strcmp(argv[0], "path") == 0 || strcmp(argv[0], "addpath") == 0) cmd_path(argv);
         else if (strcmp(argv[0], "dir") == 0) {
-            // Map "dir" to "ls -al"
-            argv[0] = "ls";
-            argv[1] = "-al";
-            argv[2] = NULL;
-            // Fall through to execvp...
+            argv[0] = "ls"; argv[1] = "-al"; argv[2] = NULL;
+            goto execute; // Jump to execution
         }
-
-        // 5. Execute External Commands (Fork-Exec)
-        pid_t pid = fork();
-
-        if (pid < 0) {
-            perror("Fork failed");
-        } 
-        else if (pid == 0) {
-            // --- CHILD PROCESS ---
-            
-            // Execute the command
-            if (execvp(argv[0], argv) < 0) {
-                printf("Command not found: %s\n", argv[0]);
-            }
-            exit(1); // Kill child if exec fails
-        } 
         else {
-            // --- PARENT PROCESS ---
-            if (background) {
-                // Background mode: Don't wait, just print PID
-                printf("[Process running in background with PID: %d]\n", pid);
+            // 6. EXTERNAL COMMANDS
+            execute:
+            pid_t pid = fork();
+            if (pid < 0) perror("Fork failed");
+            else if (pid == 0) {
+                if (execvp(argv[0], argv) < 0) printf("Command not found: %s\n", argv[0]);
+                exit(1);
             } else {
-                // Foreground mode: Wait for child to finish
-                waitpid(pid, NULL, 0);
+                if (!background) waitpid(pid, NULL, 0);
+                else printf("[Background PID: %d]\n", pid);
             }
         }
+
+        // Free memory allocated by readline
+        free(line);
     }
     return 0;
 }
